@@ -530,16 +530,27 @@ function init() {
   var hasKey = S.provider === 'gemini' ? !!S.gkey : !!S.grkey;
   document.getElementById('api-warn').style.display = hasKey ? 'none' : 'block';
 
-  // Resume
+  // Resume — validate before showing banner (stale sessions cause freeze)
   var saved = LS.get(K.session);
-  if (saved && saved.subject && saved.queue && saved.queue.length && saved.idx < saved.queue.length) {
-    S.savedSession = saved;
-    document.getElementById('resume-info').textContent =
-      saved.subject + ' · card ' + (saved.idx+1) + ' of ' + saved.queue.length;
-    document.getElementById('resume-banner').style.display = 'flex';
+  if (saved && saved.subject && S.subjects[saved.subject] &&
+      saved.queue && saved.queue.length && saved.idx < saved.queue.length) {
+    // Validate queue entries still exist in subjects
+    var valid = true;
+    for (var qi = 0; qi < Math.min(saved.queue.length, 5); qi++) {
+      if (!saved.queue[qi] || !saved.queue[qi].subtopic) { valid = false; break; }
+    }
+    if (valid) {
+      S.savedSession = saved;
+      document.getElementById('resume-info').textContent =
+        saved.subject + ' · card ' + (saved.idx+1) + ' of ' + saved.queue.length;
+      document.getElementById('resume-banner').style.display = 'flex';
+    } else {
+      LS.del(K.session); // discard corrupt session
+    }
   }
 
-  renderSubjects();
+  // Defer render so page paints before doing heavy DOM work
+  setTimeout(function(){ renderSubjects(); }, 0);
 }
 
 // ═══════════════════════════════════════════
@@ -581,19 +592,40 @@ function renderSubjects() {
       if (S.flags[fk(name, topics[j].subtopic)]) weakN++;
     }
     var isSel = S.currentSubject === name;
-    html += '<div class="subject-item' + (isSel ? ' active' : '') + '" onclick="selectSubject(' + JSON.stringify(name) + ')">' +
+    html += '<div class="subject-item' + (isSel ? ' active' : '') + '" data-si="' + i + '">' +
       '<div style="flex:1;min-width:0">' +
         '<div class="subject-name">' + x(name) + '</div>' +
         '<div class="subject-meta">' + topics.length + ' subtopics' + (weakN ? ' · ' + weakN + ' weak' : '') + '</div>' +
       '</div>' +
       '<div class="subject-actions">' +
         (weakN ? '<span class="badge">' + weakN + ' weak</span>' : '') +
-        '<button class="btn btn-sm btn-ghost" title="Edit" onclick="event.stopPropagation();editSubject(' + JSON.stringify(name) + ')">✎</button>' +
-        '<button class="btn btn-sm btn-ghost" title="Delete" onclick="event.stopPropagation();deleteSubject(' + JSON.stringify(name) + ')">✕</button>' +
+        '<button class="btn btn-sm btn-ghost" title="Edit" data-edit="' + i + '">✎</button>' +
+        '<button class="btn btn-sm btn-ghost" title="Delete" data-del="' + i + '">✕</button>' +
       '</div>' +
     '</div>';
   }
   el.innerHTML = html;
+  // Attach events after render — avoids all JSON/HTML attribute escaping issues
+  var allNames = names;
+  el.querySelectorAll('.subject-item').forEach(function(item) {
+    var idx = parseInt(item.dataset.si);
+    item.addEventListener('click', function(e) {
+      if (e.target.closest('[data-edit],[data-del]')) return;
+      selectSubject(allNames[idx]);
+    });
+  });
+  el.querySelectorAll('[data-edit]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      editSubject(allNames[parseInt(btn.dataset.edit)]);
+    });
+  });
+  el.querySelectorAll('[data-del]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      deleteSubject(allNames[parseInt(btn.dataset.del)]);
+    });
+  });
 }
 
 function selectSubject(name) {
@@ -658,12 +690,12 @@ function renderPanel() {
         '<div class="topic-meta-row">' +
           // Stars
           '<div class="stars">' +
-            '<span class="star' + (starVal>=1?' on':'') + '" onclick="setStar(' + JSON.stringify(k2) + ',1)" title="Low importance">★</span>' +
-            '<span class="star' + (starVal>=2?' on':'') + '" onclick="setStar(' + JSON.stringify(k2) + ',2)" title="Medium importance">★</span>' +
-            '<span class="star' + (starVal>=3?' on':'') + '" onclick="setStar(' + JSON.stringify(k2) + ',3)" title="High importance — quizzed 2×">★</span>' +
+            '<span class="star' + (starVal>=1?' on':'') + '" data-star="1" data-key="' + h + '_' + g + '" title="Low importance">★</span>' +
+            '<span class="star' + (starVal>=2?' on':'') + '" data-star="2" data-key="' + h + '_' + g + '" title="Medium importance">★</span>' +
+            '<span class="star' + (starVal>=3?' on':'') + '" data-star="3" data-key="' + h + '_' + g + '" title="High importance — quizzed 2×">★</span>' +
           '</div>' +
           // Manual traffic light
-          '<div class="tl-box ' + tlClass + '" onclick="cycleTL(' + JSON.stringify(k2) + ')" title="Manual grade: click to cycle"></div>' +
+          '<div class="tl-box ' + tlClass + '" data-tl="' + h + '_' + g + '" title="Manual grade: click to cycle"></div>' +
           // Avg score
           (isW ? '<span style="font-size:0.65rem;color:#c4a95a">●</span>' : '') +
           (avg !== null ? '<span style="font-size:0.72rem;font-family:\'DM Mono\',monospace;color:#5a5652">' + avg + '%</span>' : '') +
@@ -672,6 +704,28 @@ function renderPanel() {
     }
   }
   document.getElementById('topic-rows').innerHTML = html;
+
+  // Build a flat index: 'h_g' -> actual fk key string
+  var keyMap = {};
+  for (var g2 = 0; g2 < groupOrder.length; g2++) {
+    var items2 = groups[groupOrder[g2]];
+    for (var h2 = 0; h2 < items2.length; h2++) {
+      keyMap[h2 + '_' + g2] = fk(S.currentSubject, items2[h2].subtopic);
+    }
+  }
+
+  document.getElementById('topic-rows').querySelectorAll('[data-star]').forEach(function(el2) {
+    el2.addEventListener('click', function() {
+      var realKey = keyMap[el2.dataset.key];
+      if (realKey) setStar(realKey, parseInt(el2.dataset.star));
+    });
+  });
+  document.getElementById('topic-rows').querySelectorAll('[data-tl]').forEach(function(el2) {
+    el2.addEventListener('click', function() {
+      var realKey = keyMap[el2.dataset.tl];
+      if (realKey) cycleTL(realKey);
+    });
+  });
 }
 
 function checkAll()   { document.querySelectorAll('.tc').forEach(function(c){c.checked=true;}); }
@@ -1118,7 +1172,10 @@ async function importSheets() {
     var csv=await fetchCSV(url);
     var topics=parseCSV(csv);
     if(!topics.length) throw new Error('No valid rows. Check columns: Topic, Subtopic, Notes (row 1 is header).');
-    S.subjects[name]=topics; LS.set(K.subjects,S.subjects);
+    // Strip internal _stars/_grade before saving topics, store them separately
+    applyImportedProgress(name, topics);
+    var cleanTopics = topics.map(function(t){return{topic:t.topic,subtopic:t.subtopic,notes:t.notes};});
+    S.subjects[name]=cleanTopics; LS.set(K.subjects,S.subjects);
     setStatus(stat,'✓ '+topics.length+' subtopics imported!','ok');
     renderSubjects();
     setTimeout(function(){closeModal('import');stat.textContent='';btn.disabled=false;selectSubject(name);},1200);
@@ -1155,7 +1212,9 @@ function importFile(){
   try{
     var topics=parseCSV(S.pendingCSV);
     if(!topics.length) throw new Error('No valid rows. Columns: Topic, Subtopic, Notes');
-    S.subjects[name]=topics; LS.set(K.subjects,S.subjects);
+    applyImportedProgress(name, topics);
+    var cleanTopics = topics.map(function(t){return{topic:t.topic,subtopic:t.subtopic,notes:t.notes};});
+    S.subjects[name]=cleanTopics; LS.set(K.subjects,S.subjects);
     setStatus(stat,'✓ '+topics.length+' subtopics imported!','ok');
     renderSubjects(); S.pendingCSV=null;
     setTimeout(function(){closeModal('import');stat.textContent='';selectSubject(name);},1200);
@@ -1165,10 +1224,41 @@ function importFile(){
 // ═══════════════════════════════════════════
 // CSV PARSER
 // ═══════════════════════════════════════════
+// Apply stars and grade columns from imported CSV into S.stars / S.manualTL
+function applyImportedProgress(subjectName, topics) {
+  var changed = false;
+  for (var i = 0; i < topics.length; i++) {
+    var t = topics[i];
+    var k = fk(subjectName, t.subtopic);
+    if (t._stars && t._stars >= 1 && t._stars <= 3) {
+      S.stars[k] = t._stars; changed = true;
+    }
+    var validGrades = ['green','yellow','red'];
+    if (t._grade && validGrades.indexOf(t._grade) > -1) {
+      S.manualTL[k] = t._grade; changed = true;
+    }
+  }
+  if (changed) { LS.set(K.stars, S.stars); LS.set(K.manualTL, S.manualTL); }
+}
+
 function parseCSV(csv){
-  return csv.split('\n').slice(1).filter(function(r){return r.trim();}).map(function(row){
-    var cols=parseRow(row);
-    return{topic:(cols[0]||'').trim(),subtopic:(cols[1]||'').trim(),notes:(cols[2]||'').trim()};
+  // Detect header row to skip it reliably
+  var lines = csv.split('\n').filter(function(r){return r.trim();});
+  // Skip first row if it looks like a header (topic col contains 'topic' case-insensitive)
+  var startIdx = 0;
+  if (lines.length > 0) {
+    var firstCols = parseRow(lines[0]);
+    if ((firstCols[0]||'').trim().toLowerCase() === 'topic') startIdx = 1;
+  }
+  return lines.slice(startIdx).map(function(row){
+    var cols = parseRow(row);
+    return {
+      topic:    (cols[0]||'').trim(),
+      subtopic: (cols[1]||'').trim(),
+      notes:    (cols[2]||'').trim(),
+      _stars:   parseInt(cols[3]||'0') || 0,
+      _grade:   (cols[4]||'').trim().toLowerCase()
+    };
   }).filter(function(t){return t.topic&&t.subtopic;});
 }
 function parseRow(row){
