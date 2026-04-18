@@ -201,6 +201,17 @@ body.light .badge{background:#fdf8ee;color:#8a6000;border-color:#e0c060}
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#3e3b38;border-radius:99px}
+/* DIFF TOGGLE */
+.diff-toggle{display:flex;gap:2px;background:#0c0c0c;border-radius:6px;padding:2px;border:1px solid #2e2b28}
+body.light .diff-toggle{background:#f0ece6;border-color:#d0ccc6}
+.diff-btn{padding:0.25rem 0.6rem;border-radius:4px;font-size:0.72rem;font-weight:600;font-family:'DM Mono',monospace;border:none;background:transparent;color:#5a5652;cursor:pointer;transition:all 0.12s}
+.diff-btn.on{background:#c4a95a;color:#0c0c0c}
+/* MIC */
+.mic-btn{padding:0.5rem 0.75rem;border-radius:8px;border:1px solid #2e2b28;background:#1a1816;color:#e2ddd6;font-size:0.85rem;cursor:pointer;transition:all 0.12s;display:inline-flex;align-items:center;gap:0.35rem}
+.mic-btn:hover{border-color:#3e3b38;background:#242220}
+.mic-btn.recording{background:#7a2828;border-color:#b04040;color:#fff;animation:pulse 1s infinite}
+body.light .mic-btn{background:#fff;border-color:#d0ccc6;color:#1a1816}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}
 </style>
 </head>
 <body>
@@ -264,7 +275,15 @@ body.light .badge{background:#fdf8ee;color:#8a6000;border-color:#e0c060}
   <div class="quiz-top">
     <button class="btn btn-sm btn-ghost" onclick="exitQuiz()">← Exit</button>
     <span class="mono muted" id="quiz-ctr" style="font-size:0.82rem"></span>
-    <button class="btn btn-sm btn-ghost" id="flag-btn" onclick="toggleFlag()">Flag weak</button>
+    <div style="display:flex;align-items:center;gap:0.4rem">
+      <div class="diff-toggle" id="quiz-diff-toggle">
+        <button class="diff-btn" data-d="easy" onclick="setDifficulty('easy')">E</button>
+        <button class="diff-btn" data-d="medium" onclick="setDifficulty('medium')">M</button>
+        <button class="diff-btn" data-d="hard" onclick="setDifficulty('hard')">H</button>
+      </div>
+      <button class="btn btn-sm btn-ghost" id="mute-btn" onclick="toggleMute()" title="Toggle text-to-speech">🔊</button>
+      <button class="btn btn-sm btn-ghost" id="flag-btn" onclick="toggleFlag()">Flag</button>
+    </div>
   </div>
   <div class="progress-bar"><div class="progress-fill" id="prog" style="width:0%"></div></div>
 
@@ -272,6 +291,7 @@ body.light .badge{background:#fdf8ee;color:#8a6000;border-color:#e0c060}
     <div class="card-subj" id="card-subj"></div>
     <div class="card-sub" id="card-sub"></div>
     <div class="card-reveal" id="card-reveal"></div>
+    <button class="btn-ghost btn-sm" id="speak-btn" onclick="speakCard()" style="font-size:0.8rem;opacity:0.5;margin-top:0.25rem" title="Read aloud">🔈 replay</button>
   </div>
 
   <div class="card-btns">
@@ -282,8 +302,12 @@ body.light .badge{background:#fdf8ee;color:#8a6000;border-color:#e0c060}
   <div id="explanation-box" class="explanation-box" style="display:none"></div>
 
   <div class="answer-section">
-    <span class="label-caps" style="display:block;margin-bottom:0.5rem">Check your understanding</span>
-    <textarea id="answer-input" placeholder="Type what you think this subtopic means…"></textarea>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem">
+      <span class="label-caps">Check your understanding</span>
+      <button class="mic-btn" id="mic-btn" onclick="toggleMic()" style="display:none">🎤 Hold to speak</button>
+    </div>
+    <textarea id="answer-input" placeholder="Type or use the mic to speak your answer…"></textarea>
+    <div id="mic-status" style="font-size:0.75rem;font-family:'DM Mono',monospace;color:#c4a95a;min-height:1.1rem;margin-top:0.25rem"></div>
     <div class="check-row">
       <div class="manual-grade">
         <span class="mg-label">Manual grade:</span>
@@ -359,6 +383,15 @@ body.light .badge{background:#fdf8ee;color:#8a6000;border-color:#e0c060}
         <option value="llama-3.1-8b-instant">llama-3.1-8b — fastest</option>
         <option value="mixtral-8x7b-32768">mixtral-8x7b</option>
         <option value="gemma2-9b-it">gemma2-9b</option>
+      </select>
+    </div>
+    <div class="divider"></div>
+    <div>
+      <div style="font-size:0.8rem;color:#7a7670;margin-bottom:0.5rem">Grading difficulty</div>
+      <select id="s-diff" onchange="updateDiffUI()">
+        <option value="easy">Easy — keywords enough, no elaboration needed</option>
+        <option value="medium">Medium — concepts + some explanation</option>
+        <option value="hard">Hard — full accurate explanation required</option>
       </select>
     </div>
     <div class="divider"></div>
@@ -480,7 +513,7 @@ var K = {
   manualTL:'fs3_mtl', session:'fs3_sess',
   provider:'fs3_prov', gkey:'fs3_gkey', gmodel:'fs3_gmod',
   grkey:'fs3_grkey', grmodel:'fs3_grmod',
-  threshold:'fs3_thr', theme:'fs3_thm'
+  threshold:'fs3_thr', theme:'fs3_thm', difficulty:'fs3_diff', muted:'fs3_mute'
 };
 
 // ═══════════════════════════════════════════
@@ -496,7 +529,8 @@ var S = {
   idx:0,
   stats:{seen:0,scored:0,totalScore:0,flagged:0},
   pendingCSV:null, editingSubject:null, savedSession:null,
-  currentManualGrade:null
+  currentManualGrade:null,
+  difficulty:'easy', muted:false, recognition:null
 };
 
 // ═══════════════════════════════════════════
@@ -513,7 +547,9 @@ function init() {
   S.gmodel    = LS.get(K.gmodel)    || 'gemini-2.0-flash';
   S.grkey     = LS.get(K.grkey)     || '';
   S.grmodel   = LS.get(K.grmodel)   || 'llama-3.3-70b-versatile';
-  S.threshold = (LS.get(K.threshold) !== null) ? LS.get(K.threshold) : 60;
+  S.threshold  = (LS.get(K.threshold) !== null) ? LS.get(K.threshold) : 60;
+  S.difficulty = LS.get(K.difficulty) || 'easy';
+  S.muted      = LS.get(K.muted) === true;
 
   if ((LS.get(K.theme) || 'dark') === 'light') document.body.classList.add('light');
 
@@ -525,7 +561,9 @@ function init() {
   document.getElementById('s-grmodel').value  = S.grmodel;
   document.getElementById('s-thresh').value   = S.threshold;
   document.getElementById('s-tval').textContent = S.threshold + '%';
+  document.getElementById('s-diff').value = S.difficulty;
   updateProviderUI();
+  updateDiffUI();
 
   var hasKey = S.provider === 'gemini' ? !!S.gkey : !!S.grkey;
   document.getElementById('api-warn').style.display = hasKey ? 'none' : 'block';
@@ -551,6 +589,8 @@ function init() {
 
   // Defer render so page paints before doing heavy DOM work
   setTimeout(function(){ renderSubjects(); }, 0);
+  // Init mic after a short delay (needs DOM ready)
+  setTimeout(function(){ initMic(); updateDiffUI(); }, 200);
 }
 
 // ═══════════════════════════════════════════
@@ -921,6 +961,9 @@ function renderCard() {
   document.getElementById('quiz-ctr').textContent = (S.idx+1) + ' / ' + total;
   document.getElementById('prog').style.width = Math.round(((S.idx+1)/total)*100) + '%';
   S.stats.seen++;
+  updateDiffUI();
+  // Auto-read subtopic
+  if (!S.muted) speakCard();
 }
 
 function revealTopic() {
@@ -1004,7 +1047,12 @@ async function checkAnswer() {
 
   var t = S.queue[S.idx];
   var notes = t.notes ? ' Notes: ' + t.notes + '.' : '';
-  var prompt = 'Grade this student answer about "' + t.subtopic + '" (topic: "' + t.topic + '", subject: ' + S.currentSubject + ').' + notes + '\nStudent answer: "' + ans + '"\nReply with ONLY valid JSON (no markdown, no backticks):\n{"score":0-100,"verdict":"one word","ideal":"1-2 sentence ideal answer","feedback":"1-2 sentence specific feedback"}';
+  var diffInstr = S.difficulty === 'easy'
+    ? 'IMPORTANT: Award high marks if the student mentions the key concepts or keywords, even briefly or in note form. Do NOT penalise for lack of elaboration — keywords and short phrases are enough for full marks. Only deduct for factually wrong or missing key concepts.'
+    : S.difficulty === 'medium'
+    ? 'Award marks for correct concepts with some explanation. Minor gaps are acceptable. Brief answers that cover the main ideas should score well.'
+    : 'Expect accurate, complete explanations. Penalise missing detail, vague answers, and lack of elaboration.';
+  var prompt = 'Grade this student answer about "' + t.subtopic + '" (topic: "' + t.topic + '", subject: ' + S.currentSubject + ').' + notes + '\n' + diffInstr + '\nStudent answer: "' + ans + '"\nReply with ONLY valid JSON (no markdown, no backticks):\n{"score":0-100,"verdict":"one word","ideal":"1-2 sentence ideal answer","feedback":"1-2 sentence specific feedback"}';
 
   try {
     var raw = await callAI(prompt);
@@ -1226,19 +1274,22 @@ function importFile(){
 // ═══════════════════════════════════════════
 // Apply stars and grade columns from imported CSV into S.stars / S.manualTL
 function applyImportedProgress(subjectName, topics) {
-  var changed = false;
+  // Sheet is source of truth — wipe all existing progress for this subject first
+  var pre = subjectName + '||';
+  Object.keys(S.stars).forEach(function(k){ if(k.startsWith(pre)) delete S.stars[k]; });
+  Object.keys(S.manualTL).forEach(function(k){ if(k.startsWith(pre)) delete S.manualTL[k]; });
+  Object.keys(S.flags).forEach(function(k){ if(k.startsWith(pre)) delete S.flags[k]; });
+  Object.keys(S.scores).forEach(function(k){ if(k.startsWith(pre)) delete S.scores[k]; });
+  // Now apply what the sheet says
   for (var i = 0; i < topics.length; i++) {
     var t = topics[i];
     var k = fk(subjectName, t.subtopic);
-    if (t._stars && t._stars >= 1 && t._stars <= 3) {
-      S.stars[k] = t._stars; changed = true;
-    }
+    if (t._stars >= 1 && t._stars <= 3) S.stars[k] = t._stars;
     var validGrades = ['green','yellow','red'];
-    if (t._grade && validGrades.indexOf(t._grade) > -1) {
-      S.manualTL[k] = t._grade; changed = true;
-    }
+    if (validGrades.indexOf(t._grade) > -1) S.manualTL[k] = t._grade;
   }
-  if (changed) { LS.set(K.stars, S.stars); LS.set(K.manualTL, S.manualTL); }
+  LS.set(K.stars, S.stars); LS.set(K.manualTL, S.manualTL);
+  LS.set(K.flags, S.flags); LS.set(K.scores, S.scores);
 }
 
 function parseCSV(csv){
@@ -1357,8 +1408,13 @@ function saveSettings(){
   S.grkey=document.getElementById('s-grkey').value.trim();
   S.grmodel=document.getElementById('s-grmodel').value;
   S.threshold=parseInt(document.getElementById('s-thresh').value);
+  S.difficulty=document.getElementById('s-diff').value;
   LS.set(K.provider,S.provider); LS.set(K.gkey,S.gkey); LS.set(K.gmodel,S.gmodel);
   LS.set(K.grkey,S.grkey); LS.set(K.grmodel,S.grmodel); LS.set(K.threshold,S.threshold);
+  LS.set(K.difficulty,S.difficulty);
+  updateDiffUI();
+  // Re-init mic in case Groq key was just added
+  setTimeout(function(){ initMic(); }, 100);
   var hasKey=S.provider==='gemini'?!!S.gkey:!!S.grkey;
   document.getElementById('api-warn').style.display=hasKey?'none':'block';
   closeModal('settings');
@@ -1369,6 +1425,7 @@ function clearAll(){
   S.subjects={}; S.scores={}; S.flags={}; S.stars={}; S.manualTL={};
   S.provider='gemini'; S.gkey=''; S.gmodel='gemini-2.0-flash';
   S.grkey=''; S.grmodel='llama-3.3-70b-versatile'; S.threshold=60;
+  S.difficulty='easy'; S.muted=false;
   S.currentSubject=null; S.savedSession=null; S.queue=[];
   document.getElementById('s-gkey').value=''; document.getElementById('s-grkey').value='';
   document.getElementById('s-thresh').value=60; document.getElementById('s-tval').textContent='60%';
@@ -1376,6 +1433,184 @@ function clearAll(){
   document.getElementById('resume-banner').style.display='none';
   document.getElementById('topic-panel').style.display='none';
   renderSubjects(); closeModal('settings');
+}
+
+// ═══════════════════════════════════════════
+// TEXT-TO-SPEECH
+// ═══════════════════════════════════════════
+function speakCard() {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  var t = S.queue && S.queue[S.idx];
+  if (!t) return;
+  var utt = new SpeechSynthesisUtterance(t.subtopic);
+  utt.rate = 0.95; utt.pitch = 1;
+  window.speechSynthesis.speak(utt);
+}
+
+function toggleMute() {
+  S.muted = !S.muted;
+  LS.set(K.muted, S.muted);
+  document.getElementById('mute-btn').textContent = S.muted ? '🔇' : '🔊';
+  if (S.muted && window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+// ═══════════════════════════════════════════
+// VOICE INPUT (Web Speech Recognition)
+// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+// VOICE INPUT — Groq Whisper (works in all browsers)
+// ═══════════════════════════════════════════
+function initMic() {
+  // MediaRecorder works in all browsers including Brave
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  if (!window.MediaRecorder) return;
+  // Only show mic button if Groq key is set
+  if (!S.grkey) {
+    setMicStatus('Add a Groq API key in Settings to enable voice input.');
+    return;
+  }
+  document.getElementById('mic-btn').style.display = 'inline-flex';
+}
+
+function toggleMic() {
+  if (S._micOn) stopMic(); else startMic();
+}
+
+function startMic() {
+  if (!S.grkey) {
+    alert('Add a Groq API key in Settings to use voice input.');
+    return;
+  }
+  // Cancel TTS if playing
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
+    S._micOn = true;
+    S._micStream = stream;
+    S._micChunks = [];
+
+    // Pick best supported format
+    var mimeType = '';
+    var candidates = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus','audio/mp4'];
+    for (var i = 0; i < candidates.length; i++) {
+      if (MediaRecorder.isTypeSupported(candidates[i])) { mimeType = candidates[i]; break; }
+    }
+
+    var options = mimeType ? { mimeType: mimeType } : {};
+    S._mediaRecorder = new MediaRecorder(stream, options);
+
+    S._mediaRecorder.ondataavailable = function(e) {
+      if (e.data && e.data.size > 0) S._micChunks.push(e.data);
+    };
+
+    S._mediaRecorder.onstop = function() {
+      // Stop all tracks so mic light turns off
+      stream.getTracks().forEach(function(t) { t.stop(); });
+      var blob = new Blob(S._micChunks, { type: mimeType || 'audio/webm' });
+      S._micChunks = [];
+      transcribeWithGroq(blob);
+    };
+
+    S._mediaRecorder.start(250); // collect chunks every 250ms
+
+    document.getElementById('mic-btn').textContent = '⏹ Stop';
+    document.getElementById('mic-btn').classList.add('recording');
+    setMicStatus('Recording…');
+
+    // Timer display
+    S._micSeconds = 0;
+    S._micTimer = setInterval(function() {
+      S._micSeconds++;
+      setMicStatus('Recording… ' + S._micSeconds + 's');
+    }, 1000);
+
+  }).catch(function(err) {
+    setMicStatus('Mic error: ' + err.message);
+    console.warn('getUserMedia error:', err);
+  });
+}
+
+function stopMic() {
+  S._micOn = false;
+  clearInterval(S._micTimer);
+  document.getElementById('mic-btn').textContent = '🎤 Speak';
+  document.getElementById('mic-btn').classList.remove('recording');
+  setMicStatus('Transcribing…');
+  if (S._mediaRecorder && S._mediaRecorder.state !== 'inactive') {
+    S._mediaRecorder.stop(); // triggers onstop → transcribeWithGroq
+  }
+}
+
+async function transcribeWithGroq(audioBlob) {
+  try {
+    var formData = new FormData();
+    // Groq Whisper needs a filename with extension to detect format
+    var ext = audioBlob.type.indexOf('ogg') > -1 ? 'ogg' : audioBlob.type.indexOf('mp4') > -1 ? 'mp4' : 'webm';
+    formData.append('file', audioBlob, 'recording.' + ext);
+    formData.append('model', 'whisper-large-v3-turbo');
+    formData.append('response_format', 'text');
+    formData.append('language', 'en');
+
+    var res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + S.grkey },
+      body: formData
+    });
+
+    if (!res.ok) {
+      var err = await res.json().catch(function(){ return {}; });
+      throw new Error(err.error && err.error.message ? err.error.message : 'Groq error ' + res.status);
+    }
+
+    var transcript = (await res.text()).trim();
+    if (!transcript) { setMicStatus('Nothing heard — try again.'); return; }
+
+    // Append to textarea
+    var ta = document.getElementById('answer-input');
+    var existing = ta.value;
+    if (existing && !existing.endsWith(' ')) existing += ' ';
+    ta.value = existing + transcript;
+    ta.scrollTop = ta.scrollHeight;
+
+    var words = ta.value.trim().split(' ').filter(function(w){ return w; }).length;
+    setMicStatus('✓ ' + words + ' word' + (words === 1 ? '' : 's') + ' captured');
+
+    // Clear status after 3 seconds
+    setTimeout(function(){ setMicStatus(''); }, 3000);
+
+  } catch(e) {
+    setMicStatus('Error: ' + e.message);
+    console.warn('Whisper error:', e);
+  }
+}
+
+function setMicStatus(msg) {
+  var el = document.getElementById('mic-status');
+  if (el) el.textContent = msg;
+}
+
+// ═══════════════════════════════════════════
+// DIFFICULTY
+// ═══════════════════════════════════════════
+function setDifficulty(d) {
+  S.difficulty = d;
+  LS.set(K.difficulty, d);
+  // Sync settings modal if open
+  var sel = document.getElementById('s-diff');
+  if (sel) sel.value = d;
+  updateDiffUI();
+}
+
+function updateDiffUI() {
+  // Quiz header buttons
+  var btns = document.querySelectorAll('#quiz-diff-toggle .diff-btn');
+  btns.forEach(function(b) {
+    b.classList.toggle('on', b.dataset.d === S.difficulty);
+  });
+  // Mute button state
+  var mb = document.getElementById('mute-btn');
+  if (mb) mb.textContent = S.muted ? '🔇' : '🔊';
 }
 
 // ═══════════════════════════════════════════
